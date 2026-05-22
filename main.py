@@ -14,6 +14,7 @@ from PIL import Image, ImageTk, ImageFont
 import win32api
 import win32con
 import win32gui
+import subprocess
 
 class App:
     def __init__(self):
@@ -32,6 +33,7 @@ class App:
         self.work_countdown_end_time = None
         self.work_countdown_active = False
         self._work_browser_opened = False
+        self._work_notified = False
         # 恢复未完成的倒计时
         saved_end = self.config.get("work_countdown_end_time")
         if saved_end:
@@ -243,6 +245,10 @@ class App:
                     self.work_countdown_active = False
                     self.work_countdown_end_time = None
                     self._save_work_countdown_state()
+                    win32gui.PostMessage(win32con.HWND_BROADCAST, win32con.WM_SYSCOMMAND, win32con.SC_MONITORPOWER, 2)
+                elif remaining <= 60 and not getattr(self, '_work_notified', False):
+                    self._work_notified = True
+                    self._show_toast("下班了", "准备收拾收拾，下班打卡！")
                 elif remaining <= 1800 and not getattr(self, '_work_browser_opened', False):
                     self._work_browser_opened = True
                     self.open_browser()
@@ -260,6 +266,12 @@ class App:
             seconds = end_time - cur_time
             if seconds < 0:
                 seconds += 86400
+            if seconds <= 60 and not getattr(self, '_target_notified', False):
+                self._target_notified = True
+                self._show_toast("下班了", "准备收拾收拾，下班打卡！")
+            if seconds <= 0:
+                win32gui.PostMessage(win32con.HWND_BROADCAST, win32con.WM_SYSCOMMAND, win32con.SC_MONITORPOWER, 2)
+                self._target_notified = False
             hour = int(seconds // 60 // 60)
             min = int(seconds // 60 % 60)
             sec = int(seconds % 60)
@@ -378,6 +390,7 @@ class App:
         self.work_countdown_end_time = datetime.datetime.now() + datetime.timedelta(hours=9)
         self.work_countdown_active = True
         self._work_browser_opened = False
+        self._work_notified = False
         self._save_work_countdown_state()
 
     def _schedule_work_screen_off(self):
@@ -408,8 +421,26 @@ class App:
                 self.work_countdown_end_time = wake_time + datetime.timedelta(hours=9)
                 self.work_countdown_active = True
                 self._work_browser_opened = False
+                self._work_notified = False
                 break
             time.sleep(0.1)
+
+    def _show_toast(self, title, msg):
+        ps_script = (
+            f'Add-Type -AssemblyName System.Windows.Forms;'
+            f'$n=New-Object System.Windows.Forms.NotifyIcon;'
+            f'$n.Icon=[System.Drawing.SystemIcons]::Information;'
+            f'$n.BalloonTipTitle="{title}";'
+            f'$n.BalloonTipText="{msg}";'
+            f'$n.Visible=$true;'
+            f'$n.ShowBalloonTip(5000);'
+            f'Start-Sleep -Seconds 6;'
+            f'$n.Dispose()'
+        )
+        subprocess.Popen(
+            ['powershell', '-WindowStyle', 'Hidden', '-Command', ps_script],
+            creationflags=0x08000000  # CREATE_NO_WINDOW
+        )
 
 class DraggableWindow(Frame):
     def __init__(self, master=None, child_label=None, on_move_stop=None):
