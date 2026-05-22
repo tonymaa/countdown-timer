@@ -401,28 +401,32 @@ class App:
             return
         if self.work_countdown_active:
             return
+        if getattr(self, '_monitoring_wake', False):
+            return
         # 灭屏
         win32gui.PostMessage(win32con.HWND_BROADCAST, win32con.WM_SYSCOMMAND, win32con.SC_MONITORPOWER, 2)
         # 启动监听线程
+        self._monitoring_wake = True
         thread = threading.Thread(target=self._monitor_screen_wake, daemon=True)
         thread.start()
 
     def _monitor_screen_wake(self):
-        origin_pos = win32api.GetCursorPos()
-        # 等待3秒抗误触
-        time.sleep(3)
-        origin_pos = win32api.GetCursorPos()
-        # 死循环检测鼠标移动
-        while self.work_countdown_enabled and not self.work_countdown_active:
-            current_pos = win32api.GetCursorPos()
-            if current_pos != origin_pos:
-                wake_time = datetime.datetime.now()
-                self.work_countdown_end_time = wake_time + datetime.timedelta(hours=9)
-                self.work_countdown_active = True
-                self._work_browser_opened = False
-                self._work_notified = False
-                break
-            time.sleep(0.1)
+        try:
+            origin_pos = win32api.GetCursorPos()
+            time.sleep(3)
+            origin_pos = win32api.GetCursorPos()
+            while self.work_countdown_enabled and not self.work_countdown_active:
+                current_pos = win32api.GetCursorPos()
+                if current_pos != origin_pos:
+                    wake_time = datetime.datetime.now()
+                    self.work_countdown_end_time = wake_time + datetime.timedelta(hours=9)
+                    self.work_countdown_active = True
+                    self._work_browser_opened = False
+                    self._work_notified = False
+                    break
+                time.sleep(0.1)
+        finally:
+            self._monitoring_wake = False
 
     def _show_toast(self, title, msg):
         def _popup():
