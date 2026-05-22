@@ -31,6 +31,7 @@ class App:
         self.work_countdown_enabled = self.config.get("work_countdown_enabled", False)
         self.work_countdown_end_time = None
         self.work_countdown_active = False
+        self._work_browser_opened = False
         # 恢复未完成的倒计时
         saved_end = self.config.get("work_countdown_end_time")
         if saved_end:
@@ -242,6 +243,8 @@ class App:
                     self.work_countdown_active = False
                     self.work_countdown_end_time = None
                     self._save_work_countdown_state()
+                elif remaining <= 1800 and not getattr(self, '_work_browser_opened', False):
+                    self._work_browser_opened = True
                     self.open_browser()
                 else:
                     hour = int(remaining // 3600)
@@ -272,7 +275,8 @@ class App:
 
     def set_one_new_schedule(self):
         schedule.clear()
-        schedule.every().day.at(str(self.target_time)).do(self.open_browser)
+        early_time = (datetime.datetime.combine(datetime.date.today(), self.target_time) - datetime.timedelta(minutes=30)).time()
+        schedule.every().day.at(str(early_time)).do(self.open_browser)
 
     def get_font(self):
         # # 从字体文件加载字体
@@ -373,6 +377,7 @@ class App:
         self.work_countdown_enabled = True
         self.work_countdown_end_time = datetime.datetime.now() + datetime.timedelta(hours=9)
         self.work_countdown_active = True
+        self._work_browser_opened = False
         self._save_work_countdown_state()
 
     def _schedule_work_screen_off(self):
@@ -402,6 +407,7 @@ class App:
                 wake_time = datetime.datetime.now()
                 self.work_countdown_end_time = wake_time + datetime.timedelta(hours=9)
                 self.work_countdown_active = True
+                self._work_browser_opened = False
                 break
             time.sleep(0.1)
 
