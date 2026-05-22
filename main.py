@@ -245,7 +245,7 @@ class App:
                     self.work_countdown_end_time = None
                     self._save_work_countdown_state()
                     win32gui.PostMessage(win32con.HWND_BROADCAST, win32con.WM_SYSCOMMAND, win32con.SC_MONITORPOWER, 2)
-                elif remaining <= 60 and not getattr(self, '_work_notified', False):
+                elif remaining <= 120 and not getattr(self, '_work_notified', False):
                     self._work_notified = True
                     self._show_toast("下班了", "准备收拾收拾，下班打卡！")
                 elif remaining <= 1800 and not getattr(self, '_work_browser_opened', False):
@@ -265,7 +265,7 @@ class App:
             seconds = end_time - cur_time
             if seconds < 0:
                 seconds += 86400
-            if seconds <= 60 and not getattr(self, '_target_notified', False):
+            if seconds <= 120 and not getattr(self, '_target_notified', False):
                 self._target_notified = True
                 self._show_toast("下班了", "准备收拾收拾，下班打卡！")
             if seconds <= 0:
