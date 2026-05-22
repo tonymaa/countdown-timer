@@ -11,6 +11,9 @@ import tkinter as tk
 import threading
 import pystray
 from PIL import Image, ImageTk, ImageFont
+import win32api
+import win32con
+import win32gui
 
 class App:
     def __init__(self):
@@ -24,6 +27,17 @@ class App:
         self.init_timer_target_time()
         self.is_show_timer_label = True
         self.is_able_move = False
+        # 上班倒计时相关
+        self.work_countdown_enabled = self.config.get("work_countdown_enabled", False)
+        self.work_countdown_end_time = None
+        self.work_countdown_active = False
+        # 恢复未完成的倒计时
+        saved_end = self.config.get("work_countdown_end_time")
+        if saved_end:
+            end_dt = datetime.datetime.fromisoformat(saved_end)
+            if end_dt > datetime.datetime.now():
+                self.work_countdown_end_time = end_dt
+                self.work_countdown_active = True
         self.run_app()
 
     def init_pos(self):
@@ -168,9 +182,14 @@ class App:
         self.menu = pystray.Menu(
             pystray.MenuItem("打开浏览器", self.open_browser),
             pystray.MenuItem("显示计时器", action=self.display_timer, checked=lambda e: self.is_show_timer_label),
+            pystray.MenuItem("切换模式", pystray.Menu(
+                pystray.MenuItem("目标时间倒计时", action=self.switch_to_target_mode, checked=lambda e: not self.work_countdown_enabled),
+                pystray.MenuItem("上班倒计时", action=self.switch_to_work_mode, checked=lambda e: self.work_countdown_enabled),
+            )),
+            pystray.MenuItem("修改计时器", action=self.set_target_time, visible=lambda e: not self.work_countdown_enabled),
+            pystray.MenuItem("立即倒计时9小时", action=self.reset_work_countdown, visible=lambda e: self.work_countdown_enabled),
             pystray.MenuItem("选择字体颜色", action=self.choose_color),
             pystray.MenuItem("调整字体透明度", action=self.adjust_alpha),
-            pystray.MenuItem("修改计时器", self.set_target_time),
             pystray.MenuItem("调整窗口位置", action=self.move_time_label, checked=lambda e: self.is_able_move),
             pystray.MenuItem("初始化窗口位置", action=self.reset_window_pos),
             pystray.MenuItem("退出", self.stop)
@@ -215,6 +234,22 @@ class App:
 
     def changeText(self):
         while True:
+            # 上班倒计时优先显示
+            if self.work_countdown_active and self.work_countdown_end_time:
+                remaining = (self.work_countdown_end_time - datetime.datetime.now()).total_seconds()
+                if remaining <= 0:
+                    self.label_time.set("下班!")
+                    self.work_countdown_active = False
+                    self.work_countdown_end_time = None
+                    self._save_work_countdown_state()
+                    self.open_browser()
+                else:
+                    hour = int(remaining // 3600)
+                    min = int((remaining % 3600) // 60)
+                    sec = int(remaining % 60)
+                    self.label_time.set(f"{hour}:{min}:{sec}")
+                time.sleep(1)
+                continue
             end_time = self.target_time
             end_time = (end_time.hour * 60 + end_time.minute) * 60 + end_time.second
             cur_time = datetime.datetime.now().time()
@@ -309,6 +344,66 @@ class App:
     def reset_window_pos(self):
         self.window.geometry(f"+{0}+{0}")
         self.on_move_stop()
+
+    def _save_work_countdown_state(self):
+        self.config["work_countdown_enabled"] = self.work_countdown_enabled
+        if self.work_countdown_active and self.work_countdown_end_time:
+            self.config["work_countdown_end_time"] = self.work_countdown_end_time.isoformat()
+        else:
+            self.config["work_countdown_end_time"] = None
+        self.save_config(self.config)
+
+    def switch_to_target_mode(self):
+        self.work_countdown_enabled = False
+        self.work_countdown_active = False
+        self.work_countdown_end_time = None
+        schedule.clear("work_screen_off")
+        self._save_work_countdown_state()
+
+    def switch_to_work_mode(self):
+        if self.work_countdown_enabled:
+            return
+        self.work_countdown_enabled = True
+        self.work_countdown_active = False
+        self.work_countdown_end_time = None
+        self._schedule_work_screen_off()
+        self._save_work_countdown_state()
+
+    def reset_work_countdown(self):
+        self.work_countdown_enabled = True
+        self.work_countdown_end_time = datetime.datetime.now() + datetime.timedelta(hours=9)
+        self.work_countdown_active = True
+        self._save_work_countdown_state()
+
+    def _schedule_work_screen_off(self):
+        schedule.clear("work_screen_off")
+        schedule.every().day.at("08:00").do(self._work_screen_off_and_monitor).tag("work_screen_off")
+
+    def _work_screen_off_and_monitor(self):
+        if not self.work_countdown_enabled:
+            return
+        if self.work_countdown_active:
+            return
+        # 灭屏
+        win32gui.PostMessage(win32con.HWND_BROADCAST, win32con.WM_SYSCOMMAND, win32con.SC_MONITORPOWER, 2)
+        # 启动监听线程
+        thread = threading.Thread(target=self._monitor_screen_wake, daemon=True)
+        thread.start()
+
+    def _monitor_screen_wake(self):
+        origin_pos = win32api.GetCursorPos()
+        # 等待3秒抗误触
+        time.sleep(3)
+        origin_pos = win32api.GetCursorPos()
+        # 死循环检测鼠标移动
+        while self.work_countdown_enabled and not self.work_countdown_active:
+            current_pos = win32api.GetCursorPos()
+            if current_pos != origin_pos:
+                wake_time = datetime.datetime.now()
+                self.work_countdown_end_time = wake_time + datetime.timedelta(hours=9)
+                self.work_countdown_active = True
+                break
+            time.sleep(0.1)
 
 class DraggableWindow(Frame):
     def __init__(self, master=None, child_label=None, on_move_stop=None):
