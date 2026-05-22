@@ -14,7 +14,6 @@ from PIL import Image, ImageTk, ImageFont
 import win32api
 import win32con
 import win32gui
-import subprocess
 
 class App:
     def __init__(self):
@@ -426,21 +425,24 @@ class App:
             time.sleep(0.1)
 
     def _show_toast(self, title, msg):
-        ps_script = (
-            f'Add-Type -AssemblyName System.Windows.Forms;'
-            f'$n=New-Object System.Windows.Forms.NotifyIcon;'
-            f'$n.Icon=[System.Drawing.SystemIcons]::Information;'
-            f'$n.BalloonTipTitle="{title}";'
-            f'$n.BalloonTipText="{msg}";'
-            f'$n.Visible=$true;'
-            f'$n.ShowBalloonTip(5000);'
-            f'Start-Sleep -Seconds 6;'
-            f'$n.Dispose()'
-        )
-        subprocess.Popen(
-            ['powershell', '-WindowStyle', 'Hidden', '-Command', ps_script],
-            creationflags=0x08000000  # CREATE_NO_WINDOW
-        )
+        def _popup():
+            top = tk.Toplevel(self.window)
+            top.overrideredirect(True)
+            top.attributes("-topmost", True)
+            top.attributes("-toolwindow", True)
+            top.configure(bg="#2d2d2d")
+            # 屏幕右上角位置
+            sw = top.winfo_screenwidth()
+            top.geometry(f"320x100+{sw - 340}+60")
+
+            tk.Label(top, text=title, fg="#ff6b6b", bg="#2d2d2d",
+                     font=("Microsoft YaHei", 14, "bold")).pack(pady=(12, 2), anchor="w", padx=16)
+            tk.Label(top, text=msg, fg="#ffffff", bg="#2d2d2d",
+                     font=("Microsoft YaHei", 10), wraplength=280).pack(anchor="w", padx=16)
+
+            top.after(30000, top.destroy)
+
+        self.window.after(0, _popup)
 
 class DraggableWindow(Frame):
     def __init__(self, master=None, child_label=None, on_move_stop=None):
