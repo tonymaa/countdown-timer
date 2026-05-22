@@ -431,14 +431,18 @@ class App:
             top.attributes("-topmost", True)
             top.attributes("-toolwindow", True)
             top.configure(bg="#2d2d2d")
-            # 屏幕右上角位置
             sw = top.winfo_screenwidth()
             top.geometry(f"320x100+{sw - 340}+60")
+
+            close_btn = tk.Button(top, text="X", fg="#aaaaaa", bg="#2d2d2d", bd=0,
+                                  font=("Arial", 10), activeforeground="#ff6b6b",
+                                  activebackground="#2d2d2d", command=top.destroy)
+            close_btn.place(x=290, y=2)
 
             tk.Label(top, text=title, fg="#ff6b6b", bg="#2d2d2d",
                      font=("Microsoft YaHei", 14, "bold")).pack(pady=(12, 2), anchor="w", padx=16)
             tk.Label(top, text=msg, fg="#ffffff", bg="#2d2d2d",
-                     font=("Microsoft YaHei", 10), wraplength=280).pack(anchor="w", padx=16)
+                     font=("Microsoft YaHei", 10), wraplength=270).pack(anchor="w", padx=16)
 
             top.after(30000, top.destroy)
 
