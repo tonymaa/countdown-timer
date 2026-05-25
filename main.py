@@ -279,15 +279,18 @@ class App:
 
     # 开始定时任务
     def start_schedule(self):
-        self.set_one_new_schedule()
+        if self.work_countdown_enabled:
+            self._schedule_work_screen_off()
+        else:
+            self.set_one_new_schedule()
         thread = threading.Thread(target=self.run_task)
         thread.setDaemon(True)
         thread.start()
 
     def set_one_new_schedule(self):
-        schedule.clear()
+        schedule.clear("target_browser")
         early_time = (datetime.datetime.combine(datetime.date.today(), self.target_time) - datetime.timedelta(minutes=30)).time()
-        schedule.every().day.at(str(early_time)).do(self.open_browser)
+        schedule.every().day.at(str(early_time)).do(self.open_browser).tag("target_browser")
 
     def get_font(self):
         # # 从字体文件加载字体
@@ -373,6 +376,7 @@ class App:
         self.work_countdown_active = False
         self.work_countdown_end_time = None
         schedule.clear("work_screen_off")
+        self.set_one_new_schedule()
         self._save_work_countdown_state()
 
     def switch_to_work_mode(self):
@@ -415,7 +419,10 @@ class App:
             origin_pos = win32api.GetCursorPos()
             time.sleep(3)
             origin_pos = win32api.GetCursorPos()
+            start_time = datetime.datetime.now()
             while self.work_countdown_enabled and not self.work_countdown_active:
+                if datetime.datetime.now() - start_time > datetime.timedelta(hours=18):
+                    break
                 current_pos = win32api.GetCursorPos()
                 if current_pos != origin_pos:
                     wake_time = datetime.datetime.now()
