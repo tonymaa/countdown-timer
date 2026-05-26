@@ -430,6 +430,7 @@ class App:
                     self.work_countdown_active = True
                     self._work_browser_opened = False
                     self._work_notified = False
+                    self._save_work_countdown_state()
                     break
                 time.sleep(0.1)
         finally:
