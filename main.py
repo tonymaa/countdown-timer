@@ -12,9 +12,7 @@ import tkinter.filedialog
 import threading
 import pystray
 from PIL import Image, ImageTk, ImageFont
-import win32api
-import win32con
-import win32gui
+import ctypes
 from pathlib import Path
 from auto_timesheet import submit_timesheet, TimesheetConfig, configure_logging
 
@@ -43,6 +41,7 @@ class App:
         self.work_countdown_active = False
         self._work_browser_opened = False
         self._work_notified = False
+        self._work_monitor_running = False
         # 恢复未完成的倒计时
         saved_end = self.config.get("work_countdown_end_time")
         if saved_end:
@@ -304,7 +303,6 @@ class App:
                     self.work_countdown_active = False
                     self.work_countdown_end_time = None
                     self._save_work_countdown_state()
-                    win32gui.PostMessage(win32con.HWND_BROADCAST, win32con.WM_SYSCOMMAND, win32con.SC_MONITORPOWER, 2)
                 elif remaining <= 120 and not getattr(self, '_work_notified', False):
                     self._work_notified = True
                     self._show_toast("下班了", "准备收拾收拾，下班打卡！")
@@ -329,7 +327,6 @@ class App:
                 self._target_notified = True
                 self._show_toast("下班了", "准备收拾收拾，下班打卡！")
             if seconds <= 0:
-                win32gui.PostMessage(win32con.HWND_BROADCAST, win32con.WM_SYSCOMMAND, win32con.SC_MONITORPOWER, 2)
                 self._target_notified = False
             hour = int(seconds // 60 // 60)
             min = int(seconds // 60 % 60)
@@ -340,7 +337,7 @@ class App:
     # 开始定时任务
     def start_schedule(self):
         if self.work_countdown_enabled:
-            self._schedule_work_screen_off()
+            self._start_work_idle_monitor()
         else:
             self.set_one_new_schedule()
         self._reschedule_timesheet()
@@ -692,7 +689,7 @@ class App:
         self.work_countdown_enabled = False
         self.work_countdown_active = False
         self.work_countdown_end_time = None
-        schedule.clear("work_screen_off")
+        self._work_monitor_running = False
         self.set_one_new_schedule()
         self._save_work_countdown_state()
 
@@ -702,7 +699,7 @@ class App:
         self.work_countdown_enabled = True
         self.work_countdown_active = False
         self.work_countdown_end_time = None
-        self._schedule_work_screen_off()
+        self._start_work_idle_monitor()
         self._save_work_countdown_state()
 
     def reset_work_countdown(self):
@@ -713,45 +710,69 @@ class App:
         self._work_notified = False
         self._save_work_countdown_state()
 
-    def _schedule_work_screen_off(self):
-        schedule.clear("work_screen_off")
-        schedule.every().day.at("08:00").do(self._work_screen_off_and_monitor).tag("work_screen_off")
-
-    def _work_screen_off_and_monitor(self):
-        if not self.work_countdown_enabled:
+    def _start_work_idle_monitor(self):
+        """启动输入监听线程（如已运行则不重复启动）。"""
+        if self._work_monitor_running:
             return
-        if self.work_countdown_active:
-            return
-        if getattr(self, '_monitoring_wake', False):
-            return
-        # 灭屏
-        win32gui.PostMessage(win32con.HWND_BROADCAST, win32con.WM_SYSCOMMAND, win32con.SC_MONITORPOWER, 2)
-        # 启动监听线程
-        self._monitoring_wake = True
-        thread = threading.Thread(target=self._monitor_screen_wake, daemon=True)
+        self._work_monitor_running = True
+        thread = threading.Thread(target=self._work_idle_monitor_loop, daemon=True)
         thread.start()
 
-    def _monitor_screen_wake(self):
-        try:
-            origin_pos = win32api.GetCursorPos()
-            time.sleep(3)
-            origin_pos = win32api.GetCursorPos()
-            start_time = datetime.datetime.now()
-            while self.work_countdown_enabled and not self.work_countdown_active:
-                if datetime.datetime.now() - start_time > datetime.timedelta(hours=18):
-                    break
-                current_pos = win32api.GetCursorPos()
-                if current_pos != origin_pos:
-                    wake_time = datetime.datetime.now()
-                    self.work_countdown_end_time = wake_time + datetime.timedelta(hours=9)
-                    self.work_countdown_active = True
-                    self._work_browser_opened = False
-                    self._work_notified = False
-                    self._save_work_countdown_state()
-                    break
-                time.sleep(0.1)
-        finally:
-            self._monitoring_wake = False
+    def _work_idle_monitor_loop(self):
+        """通过 GetLastInputInfo 监听系统鼠标/键盘活动,首次活动即视为上班。
+
+        触发条件:work_countdown_active==False 时,检测到 last_input_tick 增长
+        且当前小时在 [4, 22] 区间内,设置 9 小时倒计时。
+        凌晨跨日(date 变化)自动重置 active 状态。
+        """
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        def _read_last_input():
+            try:
+                lii = LASTINPUTINFO()
+                lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+                if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+                    return lii.dwTime
+            except Exception:
+                pass
+            return None
+
+        last_date = None
+        last_input_baseline = _read_last_input()
+
+        while self._work_monitor_running and self.work_countdown_enabled:
+            now = datetime.datetime.now()
+            today = now.date()
+
+            if last_date is not None and today != last_date and self.work_countdown_active:
+                self.work_countdown_active = False
+                self.work_countdown_end_time = None
+                self._work_browser_opened = False
+                self._work_notified = False
+                self._save_work_countdown_state()
+                last_input_baseline = _read_last_input()
+            last_date = today
+
+            current = _read_last_input()
+            if current is None:
+                time.sleep(2)
+                continue
+
+            if (not self.work_countdown_active
+                    and last_input_baseline is not None
+                    and current > last_input_baseline
+                    and 4 <= now.hour <= 22):
+                self.work_countdown_end_time = now + datetime.timedelta(hours=9)
+                self.work_countdown_active = True
+                self._work_browser_opened = False
+                self._work_notified = False
+                self._save_work_countdown_state()
+
+            last_input_baseline = current
+            time.sleep(2)
+
+        self._work_monitor_running = False
 
     def _show_toast(self, title, msg):
         def _popup():
