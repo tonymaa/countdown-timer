@@ -8,6 +8,7 @@ import datetime
 import schedule
 import time
 import tkinter as tk
+import tkinter.filedialog
 import threading
 import pystray
 from PIL import Image, ImageTk, ImageFont
@@ -468,8 +469,145 @@ class App:
         return f"Last: {when} — {last_result or 'unknown'}"
 
     def _open_timesheet_settings(self):
-        """Placeholder — implemented in Task 5."""
-        print("[timesheet] settings dialog not implemented yet")
+        """打开 Auto Timesheet 设置对话框。"""
+        ts = dict(self.config.get("timesheet", {}))  # shallow copy for editing
+
+        top = tk.Toplevel(self.window)
+        top.title("Auto Timesheet Settings")
+        top.geometry("420x340")
+        top.resizable(False, False)
+        top.transient(self.window)
+
+        # ---- variables ----
+        v_username = tk.StringVar(value=ts.get("username", ""))
+        v_password = tk.StringVar(value=ts.get("password", ""))
+        v_project = tk.StringVar(value=ts.get("project", ""))
+        v_task = tk.StringVar(value=ts.get("task", ""))
+        v_hours = tk.IntVar(value=int(ts.get("hours", 8) or 8))
+        exec_time = ts.get("exec_time", "09:05")
+        try:
+            hh_str, mm_str = exec_time.split(":", 1)
+        except ValueError:
+            hh_str, mm_str = "09", "05"
+        v_hh = tk.StringVar(value=hh_str)
+        v_mm = tk.StringVar(value=mm_str)
+        v_cabundle = tk.StringVar(value=ts.get("ca_bundle", "toppan-ca-bundle.pem"))
+        v_force = tk.BooleanVar(value=bool(ts.get("force_submit", False)))
+
+        # ---- form grid ----
+        row = 0
+        def label(text):
+            return tk.Label(top, text=text, anchor="e", width=12)
+
+        label("Username:").grid(row=row, column=0, sticky="e", padx=4, pady=4)
+        tk.Entry(top, textvariable=v_username, width=32).grid(row=row, column=1, columnspan=2, sticky="w", padx=4)
+        row += 1
+
+        label("Password:").grid(row=row, column=0, sticky="e", padx=4, pady=4)
+        tk.Entry(top, textvariable=v_password, width=32, show="*").grid(row=row, column=1, columnspan=2, sticky="w", padx=4)
+        row += 1
+
+        label("Project:").grid(row=row, column=0, sticky="e", padx=4, pady=4)
+        tk.Entry(top, textvariable=v_project, width=32).grid(row=row, column=1, columnspan=2, sticky="w", padx=4)
+        row += 1
+
+        label("Task:").grid(row=row, column=0, sticky="e", padx=4, pady=4)
+        tk.Entry(top, textvariable=v_task, width=32).grid(row=row, column=1, columnspan=2, sticky="w", padx=4)
+        row += 1
+
+        label("Hours/day:").grid(row=row, column=0, sticky="e", padx=4, pady=4)
+        tk.Spinbox(top, from_=1, to=12, textvariable=v_hours, width=5).grid(row=row, column=1, sticky="w", padx=4)
+        row += 1
+
+        label("Exec time:").grid(row=row, column=0, sticky="e", padx=4, pady=4)
+        time_frame = tk.Frame(top)
+        time_frame.grid(row=row, column=1, columnspan=2, sticky="w", padx=4)
+        tk.Entry(time_frame, textvariable=v_hh, width=4).pack(side="left")
+        tk.Label(time_frame, text=" : ").pack(side="left")
+        tk.Entry(time_frame, textvariable=v_mm, width=4).pack(side="left")
+        tk.Label(time_frame, text="(HH:MM 24h)").pack(side="left", padx=(8, 0))
+        row += 1
+
+        label("CA bundle:").grid(row=row, column=0, sticky="e", padx=4, pady=4)
+        ca_frame = tk.Frame(top)
+        ca_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=4)
+        tk.Entry(ca_frame, textvariable=v_cabundle, width=28).pack(side="left")
+        def browse_ca():
+            picked = tk.filedialog.askopenfilename(
+                parent=top,
+                title="Select CA bundle",
+                filetypes=[("PEM/CRT", "*.pem *.crt"), ("All files", "*.*")],
+            )
+            if picked:
+                v_cabundle.set(picked)
+        tk.Button(ca_frame, text="Browse...", command=browse_ca).pack(side="left", padx=4)
+        row += 1
+
+        tk.Checkbutton(top, text="Force re-submit even if week already saved", variable=v_force).grid(
+            row=row, column=0, columnspan=3, sticky="w", padx=4, pady=4
+        )
+        row += 1
+
+        # ---- action buttons ----
+        btn_frame = tk.Frame(top)
+        btn_frame.grid(row=row, column=0, columnspan=3, pady=10)
+
+        def save():
+            try:
+                hh = int(v_hh.get())
+                mm = int(v_mm.get())
+                if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                    raise ValueError("time out of range")
+            except ValueError:
+                tk.messagebox.showerror("Error", f"Invalid exec time: HH={v_hh.get()!r} MM={v_mm.get()!r}", parent=top)
+                return
+            try:
+                hours = int(v_hours.get())
+            except (tk.TclError, ValueError):
+                tk.messagebox.showerror("Error", "Hours must be an integer 1-12", parent=top)
+                return
+            if not (1 <= hours <= 12):
+                tk.messagebox.showerror("Error", "Hours must be 1-12", parent=top)
+                return
+            username = v_username.get().strip()
+            project = v_project.get().strip()
+            task = v_task.get().strip()
+            if not (username and project and task):
+                tk.messagebox.showerror("Error", "Username, Project, Task must not be empty", parent=top)
+                return
+
+            ca_bundle_raw = v_cabundle.get().strip()
+            # 若用户选了 APP_DIR 内的文件, 存为相对路径
+            if ca_bundle_raw and os.path.isabs(ca_bundle_raw):
+                try:
+                    rel = os.path.relpath(ca_bundle_raw, APP_DIR)
+                    if not rel.startswith(".."):
+                        ca_bundle_raw = rel
+                except ValueError:
+                    pass
+
+            new_ts = {
+                "enabled": ts.get("enabled", False),  # 保留原值, 不在对话框里切换
+                "username": username,
+                "password": v_password.get(),
+                "project": project,
+                "task": task,
+                "hours": hours,
+                "exec_time": f"{hh:02d}:{mm:02d}",
+                "force_submit": bool(v_force.get()),
+                "ca_bundle": ca_bundle_raw,
+                "last_run": ts.get("last_run"),
+                "last_result": ts.get("last_result"),
+            }
+            self.config["timesheet"] = new_ts
+            self.save_config(self.config)
+            self._reschedule_timesheet()
+            top.destroy()
+
+        tk.Button(btn_frame, text="Save", width=10, command=save).pack(side="left", padx=8)
+        tk.Button(btn_frame, text="Cancel", width=10, command=top.destroy).pack(side="left", padx=8)
+
+        top.grab_release()  # 不要 grab, 否则会阻塞 timer 主窗口交互
 
     def get_font(self):
         # # 从字体文件加载字体
