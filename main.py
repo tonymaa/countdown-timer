@@ -14,6 +14,12 @@ from PIL import Image, ImageTk, ImageFont
 import win32api
 import win32con
 import win32gui
+from pathlib import Path
+from auto_timesheet import submit_timesheet, TimesheetConfig, configure_logging
+
+# 计时器程序所在目录 — 用于解析 ca_bundle 等相对路径
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+TIMESHEET_DEBUG_DIR = os.path.join(APP_DIR, "timesheet_debug")
 
 class App:
     def __init__(self):
@@ -23,6 +29,9 @@ class App:
         self.init_pos()
         self.init_url()
         self.init_alpha()
+        self._init_timesheet_config()
+        # timesheet 运行状态
+        self._timesheet_running = False
         # 设置目标时间
         self.init_timer_target_time()
         self.is_show_timer_label = True
@@ -40,6 +49,11 @@ class App:
             if end_dt > datetime.datetime.now():
                 self.work_countdown_end_time = end_dt
                 self.work_countdown_active = True
+        # 配置 auto_timesheet 模块的日志输出
+        configure_logging(
+            log_path=Path(TIMESHEET_DEBUG_DIR) / "timesheet.log",
+            level="INFO",
+        )
         self.run_app()
 
     def init_pos(self):
@@ -90,6 +104,34 @@ class App:
             "window_y": 0,
             "window_x": 0,
         }
+
+    def _get_default_timesheet_config(self):
+        return {
+            "enabled": False,
+            "username": "zhiming",
+            "password": "password$1",
+            "project": "PD_AGP",
+            "task": "Prodt Devt",
+            "hours": 8,
+            "exec_time": "09:05",
+            "force_submit": False,
+            "ca_bundle": "toppan-ca-bundle.pem",
+            "last_run": None,
+            "last_result": None,
+        }
+
+    def _init_timesheet_config(self):
+        """首次启动或老 config.cof 缺少 timesheet 段时,用默认值补齐字段。"""
+        defaults = self._get_default_timesheet_config()
+        current = self.config.get("timesheet", {})
+        merged = {**defaults, **current}
+        # 类型修正: 防止历史配置里 hours 是字符串
+        try:
+            merged["hours"] = int(merged.get("hours", 8))
+        except (TypeError, ValueError):
+            merged["hours"] = 8
+        self.config["timesheet"] = merged
+        self.save_config(self.config)
 
     def reset_default_config(self):
         config = self.get_default_config()
@@ -283,6 +325,7 @@ class App:
             self._schedule_work_screen_off()
         else:
             self.set_one_new_schedule()
+        self._reschedule_timesheet()
         thread = threading.Thread(target=self.run_task)
         thread.setDaemon(True)
         thread.start()
@@ -291,6 +334,25 @@ class App:
         schedule.clear("target_browser")
         early_time = (datetime.datetime.combine(datetime.date.today(), self.target_time) - datetime.timedelta(minutes=30)).time()
         schedule.every().day.at(str(early_time)).do(self.open_browser).tag("target_browser")
+
+    def _reschedule_timesheet(self):
+        """根据 config.timesheet.enabled 重新调度 timesheet 任务。"""
+        schedule.clear("timesheet")
+        ts_cfg = self.config.get("timesheet", {})
+        if not ts_cfg.get("enabled", False):
+            return
+        exec_time = ts_cfg.get("exec_time", "09:05")
+        try:
+            datetime.datetime.strptime(exec_time, "%H:%M")
+        except ValueError:
+            logger_warn = f"Invalid exec_time {exec_time!r}, falling back to 09:05"
+            print(logger_warn)
+            exec_time = "09:05"
+            ts_cfg["exec_time"] = exec_time
+            self.save_config(self.config)
+        schedule.every().day.at(exec_time).do(
+            self._run_timesheet_async, force=False
+        ).tag("timesheet")
 
     def get_font(self):
         # # 从字体文件加载字体
