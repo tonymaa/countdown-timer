@@ -354,6 +354,82 @@ class App:
             self._run_timesheet_async, force=False
         ).tag("timesheet")
 
+    def _build_timesheet_config(self):
+        """从 self.config["timesheet"] 构造 TimesheetConfig,解析 ca_bundle 路径。"""
+        ts = self.config["timesheet"]
+        ca_bundle = ts.get("ca_bundle", "").strip()
+
+        if not ca_bundle:
+            verify_tls = False
+        else:
+            # 相对路径相对于 APP_DIR 解析
+            abs_path = ca_bundle if os.path.isabs(ca_bundle) else os.path.join(APP_DIR, ca_bundle)
+            if os.path.isfile(abs_path):
+                verify_tls = abs_path
+            else:
+                print(f"[timesheet] CA bundle not found at {abs_path}, falling back to TLS OFF")
+                verify_tls = False
+
+        return TimesheetConfig(
+            username=ts.get("username", ""),
+            password=ts.get("password", ""),
+            project=ts.get("project", ""),
+            task=ts.get("task", ""),
+            hours_per_day=int(ts.get("hours", 8) or 8),
+            verify_tls=verify_tls,
+        )
+
+    def _run_timesheet_async(self, force: bool = False):
+        """非阻塞入口: 防止重复触发,然后丢给后台线程。"""
+        if self._timesheet_running:
+            print("[timesheet] already running, skipping")
+            return
+        self._timesheet_running = True
+        thread = threading.Thread(target=self._run_timesheet_sync, args=(force,), daemon=True)
+        thread.start()
+
+    def _run_timesheet_sync(self, force: bool):
+        """实际执行 submit_timesheet; 在 daemon thread 中跑。"""
+        ts = self.config["timesheet"]
+        try:
+            cfg = self._build_timesheet_config()
+            result = submit_timesheet(
+                cfg,
+                force_submit=bool(force or ts.get("force_submit", False)),
+                debug_dir=TIMESHEET_DEBUG_DIR,
+            )
+            msg_lower = result.message.lower()
+            if not result.success:
+                action = "failed"
+            elif "skipped" in msg_lower:
+                action = "skipped"
+            else:
+                action = "submitted"
+            self._on_timesheet_done(action, result.message, result.week)
+        except Exception as e:
+            self._on_timesheet_done("failed", f"Exception: {e}", "")
+        finally:
+            self._timesheet_running = False
+
+    def _on_timesheet_done(self, action: str, message: str, week: str):
+        """更新 last_run/last_result 到 config,弹出 toast 提示。"""
+        ts = self.config.setdefault("timesheet", {})
+        ts["last_run"] = datetime.datetime.now().isoformat()
+        ts["last_result"] = action
+        self.save_config(self.config)
+
+        title_map = {
+            "submitted": "Timesheet submitted",
+            "skipped": "Timesheet skipped",
+            "failed": "Timesheet failed",
+        }
+        title = title_map.get(action, "Timesheet")
+        body = f"{week}: {message}" if week else message
+        try:
+            self._show_toast(title, body)
+        except Exception as e:
+            print(f"[timesheet] toast failed: {e}")
+
     def get_font(self):
         # # 从字体文件加载字体
         listdir = os.listdir()
