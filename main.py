@@ -236,6 +236,23 @@ class App:
             pystray.MenuItem("调整字体透明度", action=self.adjust_alpha),
             pystray.MenuItem("调整窗口位置", action=self.move_time_label, checked=lambda e: self.is_able_move),
             pystray.MenuItem("初始化窗口位置", action=self.reset_window_pos),
+            pystray.MenuItem("Auto Timesheet", pystray.Menu(
+                pystray.MenuItem(
+                    "Enabled",
+                    action=lambda *_: self._toggle_timesheet_enabled(),
+                    checked=lambda e: bool(self.config.get("timesheet", {}).get("enabled", False)),
+                ),
+                pystray.MenuItem("Settings...", action=lambda *_: self._open_timesheet_settings()),
+                pystray.MenuItem(
+                    "Run Now",
+                    action=lambda *_: self._run_timesheet_async(force=False),
+                    enabled=lambda e: not self._timesheet_running,
+                ),
+                pystray.MenuItem(
+                    text=lambda e: self._timesheet_last_label(),
+                    action=None,
+                ),
+            )),
             pystray.MenuItem("退出", self.stop)
         )
         image = Image.open("icon.png")
@@ -429,6 +446,30 @@ class App:
             self._show_toast(title, body)
         except Exception as e:
             print(f"[timesheet] toast failed: {e}")
+
+    def _toggle_timesheet_enabled(self):
+        ts = self.config.setdefault("timesheet", {})
+        ts["enabled"] = not ts.get("enabled", False)
+        self.save_config(self.config)
+        self._reschedule_timesheet()
+
+    def _timesheet_last_label(self):
+        """生成托盘菜单中 'Last' 项的显示文本。"""
+        ts = self.config.get("timesheet", {})
+        last_run = ts.get("last_run")
+        last_result = ts.get("last_result")
+        if not last_run:
+            return "Last: (never)"
+        try:
+            dt = datetime.datetime.fromisoformat(last_run)
+            when = dt.strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            when = last_run
+        return f"Last: {when} — {last_result or 'unknown'}"
+
+    def _open_timesheet_settings(self):
+        """Placeholder — implemented in Task 5."""
+        print("[timesheet] settings dialog not implemented yet")
 
     def get_font(self):
         # # 从字体文件加载字体
