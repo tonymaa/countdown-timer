@@ -30,3 +30,14 @@
 ![image-20230227172814682](README.assets/image-20230227172814682.png)
 
 ![image-20230227172830373](README.assets/image-20230227172830373.png)
+
+## Auto Timesheet
+
+自动提交 Toppan 时间表，托盘菜单 "Auto Timesheet" 配置：
+
+- **Enabled**: 启用/禁用每日自动提交
+- **Settings...**: 配置用户名、密码、项目、任务、每日小时数、执行时间、CA 证书路径、强制重交
+- **Run Now**: 立即手动执行一次
+- **Last**: 显示上次执行时间和结果
+
+CA 证书默认使用同目录下的 `toppan-ca-bundle.pem`。调试 HTML 输出和日志位于 `timesheet_debug/` 子目录。脚本来源：`auto_timesheet.py`（独立可执行：`python auto_timesheet.py --help`）。
